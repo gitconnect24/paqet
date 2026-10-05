@@ -202,32 +202,45 @@ func (h *SendHandle) Write(payload []byte, addr *net.UDPAddr) error {
 }
 
 func (h *SendHandle) getClientTCPF(dstIP net.IP, dstPort uint16) conf.TCPF {
-	h.tcpF.mu.RLock()
-	defer h.tcpF.mu.RUnlock()
-	if ff := h.tcpF.clientTCPF[hash.IPAddr(dstIP, dstPort)]; ff != nil {
-		return ff.Next()
-	}
-	return h.tcpF.tcpF.Next()
+	return h.tcpF.next(dstIP, dstPort)
 }
 
 func (h *SendHandle) setClientTCPF(addr net.Addr, f []conf.TCPF) {
-	a, ok := addr.(*net.UDPAddr)
-	if !ok {
-		return
-	}
-	h.tcpF.mu.Lock()
-	h.tcpF.clientTCPF[hash.IPAddr(a.IP, uint16(a.Port))] = &iterator.Iterator[conf.TCPF]{Items: f}
-	h.tcpF.mu.Unlock()
+	h.tcpF.set(addr, f)
 }
 
 func (h *SendHandle) deleteClientTCPF(addr net.Addr) {
+	h.tcpF.delete(addr)
+}
+
+// next returns the next TCP flag combination for a destination (per-client override or default).
+func (t *tcpF) next(dstIP net.IP, dstPort uint16) conf.TCPF {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if ff := t.clientTCPF[hash.IPAddr(dstIP, dstPort)]; ff != nil {
+		return ff.Next()
+	}
+	return t.tcpF.Next()
+}
+
+func (t *tcpF) set(addr net.Addr, f []conf.TCPF) {
 	a, ok := addr.(*net.UDPAddr)
 	if !ok {
 		return
 	}
-	h.tcpF.mu.Lock()
-	delete(h.tcpF.clientTCPF, hash.IPAddr(a.IP, uint16(a.Port)))
-	h.tcpF.mu.Unlock()
+	t.mu.Lock()
+	t.clientTCPF[hash.IPAddr(a.IP, uint16(a.Port))] = &iterator.Iterator[conf.TCPF]{Items: f}
+	t.mu.Unlock()
+}
+
+func (t *tcpF) delete(addr net.Addr) {
+	a, ok := addr.(*net.UDPAddr)
+	if !ok {
+		return
+	}
+	t.mu.Lock()
+	delete(t.clientTCPF, hash.IPAddr(a.IP, uint16(a.Port)))
+	t.mu.Unlock()
 }
 
 func (h *SendHandle) Close() {
