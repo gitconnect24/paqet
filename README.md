@@ -234,6 +234,30 @@ The `transport.kcp.block` parameter determines the encryption method.
 
 The `network.tcp.local_flag` and `network.tcp.remote_flag` arrays cycle through flag combinations to vary traffic patterns. Common patterns: `["PA"]` (standard data), `["S"]` (connection setup), `["A"]` (acknowledgment).
 
+### Performance (Linux)
+
+On Linux amd64/arm64, paqet sends and receives through raw `AF_PACKET` sockets in batches (`sendmmsg`/`recvmmsg`, up to 256 packets per syscall) with pre-laid-out headers, instead of one `pcap_sendpacket` call per packet. libpcap is still used to compile the BPF filter, and every other platform uses pcap as before. When the qdisc/driver queue is full (`ENOBUFS`), packets are briefly retried and then dropped for KCP to retransmit, rather than failing the session.
+
+- `PAQET_IO=pcap` forces the old pcap path. paqet also falls back to it automatically (with a warning) if the raw sockets cannot be opened.
+- `PAQET_PPROF=127.0.0.1:6060` exposes Go's pprof endpoints for profiling.
+
+Tuning that measured best on a CPU-bound 2-vCPU client / 4-vCPU server pair (about 2x the throughput of `mode: "fast2"`, at lower CPU): batch ACKs instead of sending one per received batch, and use several connections.
+
+```yaml
+transport:
+  conn: 4
+  kcp:
+    mode: "manual"
+    nodelay: 1
+    interval: 10
+    resend: 2
+    nocongestion: 1
+    wdelay: false
+    acknodelay: false # the important one: avoids an ACK packet + full send-window scan per received batch
+```
+
+Because paqet captures packets before netfilter, the server firewall rule can be `iptables -t raw -A PREROUTING -p tcp --dport <PORT> -j DROP` instead of `NOTRACK`. paqet still receives the packets, while the kernel skips TCP processing and RST generation for them. On the client, match the server instead (`-s <SERVER_IP> --sport <PORT>`), since the client port is random.
+
 # Architecture & Security Model
 
 ### The `pcap` Approach and Firewall Bypass
